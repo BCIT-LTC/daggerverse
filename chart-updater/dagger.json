@@ -1,0 +1,7 @@
+{
+  "name": "chart-updater",
+  "engineVersion": "v0.18.10",
+  "sdk": {
+    "source": "python"
+  }
+}
