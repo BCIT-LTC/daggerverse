@@ -68,7 +68,11 @@ class SemanticRelease:
             debug: Annotated[bool, Doc("Debug mode")] = False, # debug mode, ignored in local mode(defaults True)
             ci: Annotated[bool, Doc("CI mode")] = True, # CI mode defaults to true, ignored in local mode(defaults False)
             ) -> str:
-        
+        """
+        Run semantic-release to analyze commits and determine the next version.
+        Returns a JSON string with the last and next release versions.
+        """
+        # Set instance variables for release config
         self.github_token = github_token
         self.username = username
         self.repository_url = repository_url
@@ -76,6 +80,7 @@ class SemanticRelease:
         self.debug = debug
         self.ci = ci
 
+        # Determine the CI provider based on whether the GitHub token is set
         if github_token is not None:
             print("GITHUB_TOKEN detected")
             print("Running in GitHub Actions")
@@ -84,14 +89,14 @@ class SemanticRelease:
             print("Running locally, Semantic Release dry run mode with commit analyzer")
             self.ci_provider = CiProvider.NONE
 
-        # Configure release parameters based on the CI provider
+        # Configure semantic-release settings (e.g. CI mode, debug, plugins)
         self._configure_release_params()
         print(f"Configured release parameters: {self.releaserc.to_string()}")
 
-        # Create a container for running semantic release
+        # Prepare a container environment with dependencies for running semantic-release
         container = await self._prepare_semantic_release_container(source)
 
-        # Run semantic release for GitHub Actions
+        # Run the semantic-release command inside the container depending on execution context
         if self.ci_provider == CiProvider.GITHUB:
             print("Running in GitHub Actions")
             container = await self._github_actions_runner(container)
@@ -99,7 +104,7 @@ class SemanticRelease:
             print("Running locally")
             container = await self._local_runner(container)
         
-        #Getting the version from the output file
+        # Attempt to read the last release version from the output directory
         try:
             output_directory = container.directory(APP_DIR)
             last_release_file = output_directory.file(LAST_RELEASE_FILE)
@@ -109,6 +114,7 @@ class SemanticRelease:
             print(f"Last Release Error: {e}")
             last_version = None
         
+        # Attempt to read the next release version (if a new release is detected)
         try:
             next_release_file = output_directory.file(NEXT_RELEASE_FILE)
             next_version = (await next_release_file.contents()).strip()
@@ -117,6 +123,7 @@ class SemanticRelease:
             print("Next Release Error: ", e)
             next_version = None
         
+        # Prepare the result as a JSON-encoded string
         result_json = { "last_release": last_version, "next_release": next_version }
 
         return json.dumps(result_json)
@@ -124,10 +131,20 @@ class SemanticRelease:
 
 
     def _configure_release_params(self):
+        """
+        Configure the .releaserc settings used by semantic-release based on the
+        current branch, repository, and CI provider context.
+        """
+        # Add the current Git branch as a release branch
         self.releaserc.add_branch(self.branch)
+
+        # Set the repository URL for changelog, tags, and release publishing
         self.releaserc.set_repository_url(self.repository_url)
+
+        # Add commit analyzer plugin to determine release type (major/minor/patch) from commit messages
         self.releaserc.add_plugin("@semantic-release/commit-analyzer")
 
+        # Add exec plugin to write release version numbers to output files for later inspection
         exec_plugin = [
             "@semantic-release/exec",
             {
@@ -137,24 +154,28 @@ class SemanticRelease:
         ]
         self.releaserc.add_plugin(exec_plugin)
 
-        """Configure release parameters based on the CI provider."""
+        # Conditional configuration for GitHub CI/CD environments
         if self.ci_provider == CiProvider.GITHUB:
             # see https://github.com/semantic-release/github?tab=readme-ov-file#options
-            # for more information on the options
+            # Configure the GitHub plugin to publish GitHub releases
             github_plugin = [
                 "@semantic-release/github",
                 {
-                    "addReleases": "top",
+                    "addReleases": "top", # Adds release info to the top of the GitHub release description
                 }
             ]
 
             self.releaserc.add_plugin(github_plugin)
 
+            # Add release notes generator plugin for automatic changelog generation
             self.releaserc.add_plugin("@semantic-release/release-notes-generator")
+
+            # Apply user-defined flags to control release behavior in CI
             self.releaserc.set_dry_run(self.dry_run)
             self.releaserc.set_debug(self.debug)
             self.releaserc.set_ci(self.ci)
         else:
+            # Local execution: enable dry-run and debug mode, disable CI mode
             print("No CI provider detected, running in local mode")
             self.releaserc.set_dry_run(True)
             self.releaserc.set_debug(True)
